@@ -105,9 +105,9 @@ class LocaleDefinitionProvider implements vscode.DefinitionProvider {
     const localeId = getLocaleId(document, position);
     if (!localeId || !cacheData.has(localeId)) return;
 
-    const { index, file } = cacheData.get(localeId)!;
+    const { pos, file } = cacheData.get(localeId)!;
 
-    return new vscode.Location(file, document.positionAt(index));
+    return new vscode.Location(file, pos);
   }
 }
 
@@ -157,7 +157,7 @@ function collectLocaleInfoFromFile(relativePath: string) {
 
   return readFile(uri).then((content) =>
     getLocaleInfo(content).map(
-      ([key, value, index]) => [key, { value, index, file: uri }] as const
+      ([key, value, pos]) => [key, { value, pos, file: uri }] as const
     )
   );
 }
@@ -169,7 +169,7 @@ function readFile(uri: vscode.Uri) {
 }
 
 function getLocaleInfo(content: string) {
-  const result: Array<[string, string, number]> = [];
+  const result: Array<[string, string, vscode.Position]> = [];
   let tmp: RegExpExecArray | null = null;
 
   const kvRe =
@@ -179,10 +179,31 @@ function getLocaleInfo(content: string) {
     const { index, groups } = tmp;
     const { key, val } = groups!;
 
-    result.push([key, val, index]);
+    result.push([key, val, findPosition(content, index)]);
   }
 
   return result;
+}
+
+function findPosition(content: string, index: number) {
+  let tmp: RegExpExecArray | null = null;
+  let currentLine = 0;
+  let prevBrIndex = -1;
+  let currentBrIndex = -1;
+
+  const brRe = /\n/g;
+  while ((tmp = brRe.exec(content))) {
+    currentLine += 1;
+
+    if (tmp.index >= index) {
+      currentBrIndex = tmp.index;
+      break;
+    }
+
+    prevBrIndex = tmp.index;
+  }
+
+  return new vscode.Position(currentLine, 2);
 }
 
 function getMarkItem(range: vscode.Range, contentText: string) {
@@ -220,7 +241,7 @@ function initCacheData() {
   return new Map<
     string,
     {
-      index: number;
+      pos: vscode.Position;
       value: string;
       file: vscode.Uri;
     }
