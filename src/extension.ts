@@ -6,14 +6,13 @@ import { TextDecoder } from "util";
 import * as vscode from "vscode";
 
 const SUPPORTED_LANGUAGES = ["javascript", "typescript", "typescriptreact"];
-const cleanupCallbacks = [] as Array<() => any>;
 
 let cacheData = initCacheData();
 
-export function deactivate() {
-  cleanupCallbacks.forEach((f) => f());
-}
-
+const decorationType = vscode.window.createTextEditorDecorationType({
+  overviewRulerLane: vscode.OverviewRulerLane.Right,
+  after: { margin: "0 0 0 0.5rem" },
+});
 // this method is called when your extension is activated
 // your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -25,13 +24,16 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.languages.registerHoverProvider(
       SUPPORTED_LANGUAGES,
       new LocaleHoverProvider()
-    )
+    ),
+    registerWatcher(() => {
+      collectData(["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"]);
+    }),
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      updateDecorations();
+    })
   );
 
   collectData(["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"]);
-  registerWatcher(() => {
-    collectData(["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"]);
-  });
 }
 
 function registerWatcher(cb: () => any) {
@@ -51,9 +53,34 @@ function registerWatcher(cb: () => any) {
   w1.onDidChange(cb);
   w2.onDidChange(cb);
 
-  cleanupCallbacks.push(() => {
+  return new vscode.Disposable(() => {
     w1.dispose();
     w2.dispose();
+  });
+}
+
+function updateDecorations() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return;
+
+  const { uri } = editor.document;
+  if (/locale/.test(uri.path)) return;
+
+  readFile(uri).then((content) => {
+    editor.setDecorations(
+      decorationType,
+      getLocaleIdentifiers(content)
+        .filter(([key]) => cacheData.get(key))
+        .map(([key, index]) =>
+          getMarkItem(
+            new vscode.Range(
+              editor?.document.positionAt(index),
+              editor?.document.positionAt(index + key.length + 1)
+            ),
+            cacheData.get(key)!.value
+          )
+        )
+    );
   });
 }
 
@@ -78,9 +105,9 @@ class LocaleDefinitionProvider implements vscode.DefinitionProvider {
     const localeId = getLocaleId(document, position);
     if (!localeId || !cacheData.has(localeId)) return;
 
-    const { line, file } = cacheData.get(localeId)!;
+    const { index, file } = cacheData.get(localeId)!;
 
-    return new vscode.Location(file, new vscode.Position(line, 0));
+    return new vscode.Location(file, document.positionAt(index));
   }
 }
 
@@ -88,7 +115,7 @@ async function collectData(pattern: string[]) {
   const newCache = initCacheData();
 
   return fg(pattern, {
-    cwd: cwd(),
+    cwd: vscode.workspace.workspaceFolders![0].uri.fsPath,
     onlyFiles: true,
   })
     .then((files) =>
@@ -102,6 +129,8 @@ async function collectData(pattern: string[]) {
       );
 
       cacheData = newCache;
+
+      updateDecorations();
     });
 }
 
@@ -126,63 +155,71 @@ function collectLocaleInfoFromFile(relativePath: string) {
   );
   const uri = vscode.Uri.file(entry);
 
+  return readFile(uri).then((content) =>
+    getLocaleInfo(content).map(
+      ([key, value, index]) => [key, { value, index, file: uri }] as const
+    )
+  );
+}
+
+function readFile(uri: vscode.Uri) {
   return vscode.workspace.fs
     .readFile(uri)
-    .then((res) => new TextDecoder("utf-8").decode(res))
-    .then((content) =>
-      getLocaleInfo(content).map(
-        ([key, value, index, line]) =>
-          [key, { value, index, line, file: uri }] as const
-      )
-    );
+    .then((res) => new TextDecoder("utf-8").decode(res));
 }
 
 function getLocaleInfo(content: string) {
-  let reTmp: RegExpExecArray | null = null;
-
-  const brRe = /\n/g;
-  const brIndexes: number[] = [];
-  while ((reTmp = brRe.exec(content))) {
-    brIndexes.push(reTmp.index);
-  }
+  const result: Array<[string, string, number]> = [];
+  let tmp: RegExpExecArray | null = null;
 
   const kvRe =
     /\s+(['"])(?<key>(?:[\w-]+\.)+(?:[\w-]+))\1\s*:\s*(['"])(?<val>.*?)\3/g;
-  const tmpData: Array<[string, string, number, number]> = [];
 
-  while ((reTmp = kvRe.exec(content))) {
-    const { index, groups } = reTmp;
+  while ((tmp = kvRe.exec(content))) {
+    const { index, groups } = tmp;
     const { key, val } = groups!;
 
-    tmpData.push([key, val, index, 0]);
+    result.push([key, val, index]);
   }
 
-  let cursor1 = 0;
-  let cursor2 = 0;
-
-  // eslint-disable-next-line no-constant-condition
-  while (cursor1 < brIndexes.length && cursor2 < tmpData.length) {
-    if (brIndexes[cursor1] < tmpData[cursor2][2]) {
-      cursor1 += 1;
-      continue;
-    }
-    // 这里假设的就是一行最多只有一条
-    tmpData[cursor2][3] = cursor1 + 1;
-    cursor2 += 1;
-  }
-
-  return tmpData;
+  return result;
 }
 
-function cwd() {
-  return vscode.workspace.workspaceFolders![0].uri.fsPath;
+function getMarkItem(range: vscode.Range, contentText: string) {
+  const target: vscode.DecorationOptions = {
+    range,
+    renderOptions: {
+      after: {
+        contentText,
+        color: "rgb(209 209 209 / 80%)",
+        border: "1px dashed green",
+      },
+    },
+  };
+
+  return target;
+}
+
+function getLocaleIdentifiers(content: string) {
+  const result: Array<[string, number]> = [];
+  let tmp: RegExpExecArray | null = null;
+
+  const re = /(['"])(?<key>(?:[\w-]+\.)+(?:[\w-]+))\1/g;
+
+  while ((tmp = re.exec(content))) {
+    const { index, groups } = tmp;
+    const { key } = groups!;
+
+    result.push([key, index]);
+  }
+
+  return result;
 }
 
 function initCacheData() {
   return new Map<
     string,
     {
-      line: number;
       index: number;
       value: string;
       file: vscode.Uri;
