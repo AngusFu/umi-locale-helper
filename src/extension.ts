@@ -4,6 +4,7 @@ import * as fg from "fast-glob";
 import { join } from "path";
 import { TextDecoder } from "util";
 import * as vscode from "vscode";
+import { throttle } from "throttle-debounce";
 
 const SUPPORTED_LANGUAGES = ["javascript", "typescript", "typescriptreact"];
 
@@ -16,6 +17,11 @@ const decorationType = vscode.window.createTextEditorDecorationType({
 // this method is called when your extension is activated
 // your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
+  const onTextEditorChange = throttle(100, updateDecorations, {
+    noLeading: false,
+    noTrailing: false,
+  });
+
   context.subscriptions.push(
     vscode.languages.registerDefinitionProvider(
       SUPPORTED_LANGUAGES,
@@ -28,8 +34,14 @@ export function activate(context: vscode.ExtensionContext) {
     registerWatcher(() => {
       collectData(["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"]);
     }),
-    vscode.window.onDidChangeActiveTextEditor(() => {
+
+    vscode.window.onDidChangeActiveTextEditor((e) => {
       updateDecorations();
+    }),
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (e.document === vscode.window.activeTextEditor?.document) {
+        onTextEditorChange();
+      }
     })
   );
 
@@ -66,22 +78,20 @@ function updateDecorations() {
   const { uri } = editor.document;
   if (/locale/.test(uri.path)) return;
 
-  readFile(uri).then((content) => {
-    editor.setDecorations(
-      decorationType,
-      getLocaleIdentifiers(content)
-        .filter(([key]) => cacheData.get(key))
-        .map(([key, index]) =>
-          getMarkItem(
-            new vscode.Range(
-              editor?.document.positionAt(index),
-              editor?.document.positionAt(index + key.length + 1)
-            ),
-            cacheData.get(key)!.value
-          )
+  editor.setDecorations(
+    decorationType,
+    getLocaleIdentifiers(editor.document.getText())
+      .filter(([key]) => cacheData.get(key))
+      .map(([key, index]) =>
+        getMarkItem(
+          new vscode.Range(
+            editor?.document.positionAt(index),
+            editor?.document.positionAt(index + key.length + 1)
+          ),
+          cacheData.get(key)!.value
         )
-    );
-  });
+      )
+  );
 }
 
 class LocaleHoverProvider implements vscode.HoverProvider {
