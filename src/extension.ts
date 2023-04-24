@@ -1,14 +1,18 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
-import * as fg from "fast-glob";
-import { join } from "path";
 import { TextDecoder } from "util";
 import * as vscode from "vscode";
 import { throttle } from "throttle-debounce";
 
-const SUPPORTED_LANGUAGES = ["javascript", "typescript", "typescriptreact"];
+const SUPPORTED_LANGUAGES = [
+  "javascript",
+  "javascriptreact",
+  "typescript",
+  "typescriptreact",
+];
 
 let cacheData = initCacheData();
+let i18nFiles = [] as string[];
 
 const decorationType = vscode.window.createTextEditorDecorationType({
   overviewRulerLane: vscode.OverviewRulerLane.Right,
@@ -17,6 +21,13 @@ const decorationType = vscode.window.createTextEditorDecorationType({
 // this method is called when your extension is activated
 // your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
+  const workspaceUri = vscode.workspace.workspaceFolders![0].uri;
+
+  // TODO make this configurable
+  const patterns = ["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"].map(
+    (p) => new vscode.RelativePattern(workspaceUri, p)
+  );
+
   const onTextEditorChange = throttle(100, updateDecorations, {
     noLeading: false,
     noTrailing: false,
@@ -31,13 +42,14 @@ export function activate(context: vscode.ExtensionContext) {
       SUPPORTED_LANGUAGES,
       new LocaleHoverProvider()
     ),
-    registerWatcher(() => {
-      collectData(["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"]);
+
+    registerWatcher(patterns, () => {
+      collectAndUpdate(patterns);
     }),
 
-    vscode.window.onDidChangeActiveTextEditor((e) => {
-      updateDecorations();
-    }),
+    vscode.window.onDidChangeActiveTextEditor(updateDecorations),
+    vscode.window.onDidChangeVisibleTextEditors(updateDecorations),
+
     vscode.workspace.onDidChangeTextDocument((e) => {
       if (e.document === vscode.window.activeTextEditor?.document) {
         onTextEditorChange();
@@ -45,53 +57,50 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  collectData(["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"]);
+  collectAndUpdate(patterns);
 }
 
-function registerWatcher(cb: () => any) {
-  const w1 = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(
-      vscode.workspace.workspaceFolders![0].uri,
-      "src/locales/zh-CN/**/*.ts"
-    )
+function registerWatcher(patterns: vscode.RelativePattern[], cb: () => any) {
+  const watchers = patterns.map((p) =>
+    vscode.workspace.createFileSystemWatcher(p)
   );
-  const w2 = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(
-      vscode.workspace.workspaceFolders![0].uri,
-      "src/locales/zh-CN.ts"
-    )
+  watchers.forEach((watcher) => watcher.onDidChange(cb));
+
+  return new vscode.Disposable(() =>
+    watchers.forEach((watcher) => watcher.dispose())
   );
+}
 
-  w1.onDidChange(cb);
-  w2.onDidChange(cb);
-
-  return new vscode.Disposable(() => {
-    w1.dispose();
-    w2.dispose();
+function collectAndUpdate(patterns: vscode.GlobPattern[]) {
+  return collectData(patterns).then(() => {
+    updateDecorations();
   });
 }
 
 function updateDecorations() {
-  const editor = vscode.window.activeTextEditor;
-  if (!editor) return;
+  vscode.window.visibleTextEditors.forEach((editor) => {
+    if (
+      // filter out i18n files since they don't have to be annotated
+      i18nFiles.indexOf(editor.document.uri.fsPath) > -1
+    ) {
+      return;
+    }
 
-  const { uri } = editor.document;
-  if (/locale/.test(uri.path)) return;
-
-  editor.setDecorations(
-    decorationType,
-    getLocaleIdentifiers(editor.document.getText())
-      .filter(([key]) => cacheData.get(key))
-      .map(([key, index]) =>
-        getMarkItem(
-          new vscode.Range(
-            editor?.document.positionAt(index),
-            editor?.document.positionAt(index + key.length + 1)
-          ),
-          cacheData.get(key)!.value
+    editor.setDecorations(
+      decorationType,
+      getLocaleIdentifiers(editor.document.getText())
+        .filter(([key]) => cacheData.get(key))
+        .map(([key, index]) =>
+          getMarkItem(
+            new vscode.Range(
+              editor?.document.positionAt(index),
+              editor?.document.positionAt(index + key.length + 1)
+            ),
+            cacheData.get(key)!.value
+          )
         )
-      )
-  );
+    );
+  });
 }
 
 class LocaleHoverProvider implements vscode.HoverProvider {
@@ -100,70 +109,82 @@ class LocaleHoverProvider implements vscode.HoverProvider {
     position: vscode.Position,
     _token: vscode.CancellationToken
   ) {
-    const localeId = getLocaleId(document, position);
+    const wordRange = getWordRange(document, position);
+    const localeId = wordRange && getLocaleId(document, wordRange);
+
     if (!localeId || !cacheData.has(localeId)) return;
 
     const contents = new vscode.MarkdownString(cacheData.get(localeId)!.value);
     contents.isTrusted = true;
 
-    return new vscode.Hover(contents);
+    return new vscode.Hover(contents, wordRange);
   }
 }
 
 class LocaleDefinitionProvider implements vscode.DefinitionProvider {
   provideDefinition(document: vscode.TextDocument, position: vscode.Position) {
-    const localeId = getLocaleId(document, position);
+    const wordRange = getWordRange(document, position);
+    const localeId = wordRange && getLocaleId(document, wordRange);
+
     if (!localeId || !cacheData.has(localeId)) return;
 
     const { pos, file } = cacheData.get(localeId)!;
+    const targetLoc = new vscode.Location(file, pos);
 
-    return new vscode.Location(file, pos);
+    const ret: vscode.LocationLink[] = [
+      {
+        originSelectionRange: wordRange,
+
+        targetUri: targetLoc.uri,
+        targetRange: targetLoc.range,
+      },
+    ];
+
+    return ret;
   }
 }
 
-async function collectData(pattern: string[]) {
+async function collectData(patterns: vscode.GlobPattern[]) {
+  const uris = await Promise.all(
+    patterns.map((p) => vscode.workspace.findFiles(p))
+  );
+  const paths = uris.flat().map((uri) => uri.fsPath);
+  const result = await Promise.all(
+    [...paths].map((file) => collectLocaleInfoFromFile(file))
+  );
   const newCache = initCacheData();
+  result.forEach((arr) =>
+    arr.forEach(([key, value]) => newCache.set(key, value))
+  );
+  cacheData.clear();
 
-  return fg(pattern, {
-    cwd: vscode.workspace.workspaceFolders![0].uri.fsPath,
-    onlyFiles: true,
-  })
-    .then((files) =>
-      Promise.all(files.map((file) => collectLocaleInfoFromFile(file)))
-    )
-    .then((result) => {
-      cacheData.clear();
-
-      result.forEach((arr) =>
-        arr.forEach(([key, value]) => newCache.set(key, value))
-      );
-
-      cacheData = newCache;
-
-      updateDecorations();
-    });
+  i18nFiles = paths;
+  cacheData = newCache;
 }
 
-function getLocaleId(document: vscode.TextDocument, position: vscode.Position) {
-  const range = document.getWordRangeAtPosition(
-    position,
-    /(['"`])((?:[\w-]+\.)+(?:[\w-]+))\1/
-  );
+function getLocaleId(
+  document: vscode.TextDocument,
+  range?: vscode.Range | null
+) {
   if (range) {
-    const text = document.getText(range);
-
-    return text.replace(/^['"`]|['"`]$/g, "");
+    return document.getText(range).replace(/^['"`]|['"`]$/g, "");
   }
 
   return null;
 }
 
-function collectLocaleInfoFromFile(relativePath: string) {
-  const entry = join(
-    vscode.workspace.workspaceFolders![0].uri.fsPath,
-    relativePath
+function getWordRange(
+  document: vscode.TextDocument,
+  position: vscode.Position
+) {
+  return document.getWordRangeAtPosition(
+    position,
+    /(['"`])((?:[\w-]+\.)+(?:[\w-]+))\1/
   );
-  const uri = vscode.Uri.file(entry);
+}
+
+function collectLocaleInfoFromFile(fsPath: string) {
+  const uri = vscode.Uri.file(fsPath);
 
   return readFile(uri).then((content) =>
     getLocaleInfo(content).map(
@@ -198,19 +219,14 @@ function getLocaleInfo(content: string) {
 function findPosition(content: string, index: number) {
   let tmp: RegExpExecArray | null = null;
   let currentLine = 0;
-  let prevBrIndex = -1;
-  let currentBrIndex = -1;
 
   const brRe = /\n/g;
   while ((tmp = brRe.exec(content))) {
     currentLine += 1;
 
     if (tmp.index >= index) {
-      currentBrIndex = tmp.index;
       break;
     }
-
-    prevBrIndex = tmp.index;
   }
 
   return new vscode.Position(currentLine, 2);
