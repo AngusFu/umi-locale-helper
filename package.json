@@ -15,7 +15,8 @@
     "onLanguage:typescript",
     "onLanguage:typescriptreact",
     "onLanguage:javascript",
-    "onLanguage:javascriptreact"
+    "onLanguage:javascriptreact",
+    "onCommand:locale.rename"
   ],
   "main": "./out/extension.js",
   "repository": {
@@ -39,5 +40,27 @@
   },
   "dependencies": {
     "throttle-debounce": "^5.0.0"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "locale.rename",
+        "title": "Rename locale id (重命名 Locale ID)"
+      }
+    ],
+    "configuration": {
+      "title": "umi-locale-helper 配置",
+      "properties": {
+        "umi-locale-helper.localeFilePatterns": {
+          "type": "array",
+          "default": [
+            "src/locales/zh-CN/**/*.ts",
+            "src/locales/zh-CN.ts"
+          ],
+          "description": "国际化的文件 glob"
+        }
+      }
+    },
+    "snippets": []
   }
 }

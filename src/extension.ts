@@ -18,13 +18,18 @@ const decorationType = vscode.window.createTextEditorDecorationType({
   overviewRulerLane: vscode.OverviewRulerLane.Right,
   after: { margin: "0 0 0 0.5rem" },
 });
+
+const configuration = vscode.workspace.getConfiguration();
+
 // this method is called when your extension is activated
 // your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
   const workspaceUri = vscode.workspace.workspaceFolders![0].uri;
 
-  // TODO make this configurable
-  const glob = ["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"];
+  const glob = configuration.get("umi-locale-helper.localeFilePatterns", [
+    "src/locales/zh-CN/**/*.ts",
+    "src/locales/zh-CN.ts",
+  ]);
   const patterns = glob.map((p) => new vscode.RelativePattern(workspaceUri, p));
 
   const onTextEditorChange = throttle(100, updateDecorations, {
@@ -32,7 +37,55 @@ export function activate(context: vscode.ExtensionContext) {
     noTrailing: false,
   });
 
+  collectAndUpdate(patterns);
+
   context.subscriptions.push(
+    vscode.commands.registerCommand("locale.rename", async (ctx) => {
+      // noop
+      const document = vscode.window.activeTextEditor?.document;
+      const selection = vscode.window.activeTextEditor?.selection;
+      if (!document || !selection) return;
+
+      const localeId = getLocaleId(
+        document,
+        getWordRange(document, selection.anchor)
+      );
+      if (!localeId || !cacheData.has(localeId)) return;
+
+      const queryRe = `(['"])${localeId.replace(/\./g, "\\.")}(?:\\1)`;
+      const newName = await vscode.window.showInputBox({
+        title: "输入新的 ID，然后在在搜索栏中点击「替换全部」图标",
+        value: localeId,
+      });
+      if (
+        !newName ||
+        newName.trim() === localeId ||
+        !/^(?:[\w-]+\.)+(?:[\w-]+)$/.test(newName.trim())
+      ) {
+        vscode.window.showErrorMessage("输入内容不合法！");
+        return;
+      }
+
+      await vscode.commands.executeCommand(
+        "workbench.action.findInFiles",
+        {
+          query: queryRe,
+          replace: `$1${newName.trim()}$1`,
+          triggerSearch: true,
+          preserveCase: true,
+          isRegex: true,
+          isCaseSensitive: true,
+          matchWholeWord: true,
+          useExcludeSettingsAndIgnoreFiles: true,
+        },
+        5000
+      );
+
+      await vscode.window.showInformationMessage(
+        "请在搜索栏中点击「替换全部」图标"
+      );
+    }),
+
     vscode.languages.registerDefinitionProvider(
       SUPPORTED_LANGUAGES,
       new LocaleDefinitionProvider()
@@ -59,8 +112,6 @@ export function activate(context: vscode.ExtensionContext) {
       }
     })
   );
-
-  collectAndUpdate(patterns);
 }
 
 function registerWatcher(patterns: vscode.RelativePattern[], cb: () => any) {
@@ -173,7 +224,7 @@ class LocaleReferenceProvider implements vscode.ReferenceProvider {
           matchWholeWord: true,
           useExcludeSettingsAndIgnoreFiles: true,
         },
-        200
+        1000
       )
       .then(async () => {
         const MAGIC_STR = "@@magic";
