@@ -24,9 +24,8 @@ export function activate(context: vscode.ExtensionContext) {
   const workspaceUri = vscode.workspace.workspaceFolders![0].uri;
 
   // TODO make this configurable
-  const patterns = ["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"].map(
-    (p) => new vscode.RelativePattern(workspaceUri, p)
-  );
+  const glob = ["src/locales/zh-CN/**/*.ts", "src/locales/zh-CN.ts"];
+  const patterns = glob.map((p) => new vscode.RelativePattern(workspaceUri, p));
 
   const onTextEditorChange = throttle(100, updateDecorations, {
     noLeading: false,
@@ -41,6 +40,10 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.languages.registerHoverProvider(
       SUPPORTED_LANGUAGES,
       new LocaleHoverProvider()
+    ),
+    vscode.languages.registerReferenceProvider(
+      SUPPORTED_LANGUAGES,
+      new LocaleReferenceProvider()
     ),
 
     registerWatcher(patterns, () => {
@@ -141,6 +144,99 @@ class LocaleDefinitionProvider implements vscode.DefinitionProvider {
     ];
 
     return ret;
+  }
+}
+
+class LocaleReferenceProvider implements vscode.ReferenceProvider {
+  provideReferences(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    context: vscode.ReferenceContext,
+    token: vscode.CancellationToken
+  ): vscode.ProviderResult<vscode.Location[]> {
+    const localeId = getLocaleId(document, getWordRange(document, position));
+
+    if (!localeId || !cacheData.has(localeId)) return null;
+
+    const queryRe = `(['"])${localeId.replace(/\./g, "\\.")}(?:\\1)`;
+
+    return vscode.commands
+      .executeCommand(
+        "workbench.action.findInFiles",
+        {
+          query: queryRe,
+          replace: "",
+          triggerSearch: true,
+          preserveCase: true,
+          isRegex: true,
+          isCaseSensitive: true,
+          matchWholeWord: true,
+          useExcludeSettingsAndIgnoreFiles: true,
+        },
+        200
+      )
+      .then(async () => {
+        const MAGIC_STR = "@@magic";
+        const originalText = await vscode.env.clipboard.readText();
+        await vscode.env.clipboard.writeText(MAGIC_STR);
+
+        const start = Date.now();
+        let searchResult = MAGIC_STR;
+
+        while (searchResult && searchResult === MAGIC_STR) {
+          if (Date.now() - start > 20) {
+            vscode.window.showWarningMessage("Code searching timeout");
+            break;
+          }
+
+          await wait(100);
+          await vscode.commands.executeCommand("search.action.copyAll");
+
+          const text = await vscode.env.clipboard.readText();
+          if (text.trim()) {
+            searchResult = text.trim();
+          }
+        }
+
+        // recover clipboard
+        await vscode.env.clipboard.writeText(originalText);
+
+        if (!searchResult || searchResult === MAGIC_STR) {
+          return [];
+        }
+
+        const lines = searchResult
+          .split(/\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+
+        const [locations] = lines.reduce(
+          ([locs, currentUri], line) => {
+            if (/^\d+,\d+:/.test(line)) {
+              if (currentUri) {
+                const pos = line
+                  .split(/[,:]/)
+                  .slice(0, 2)
+                  .map((el) => Number(el));
+
+                locs.push(
+                  new vscode.Location(
+                    currentUri,
+                    new vscode.Position(pos[0], pos[1])
+                  )
+                );
+              }
+            } else {
+              currentUri = vscode.Uri.file(line);
+            }
+
+            return [locs, currentUri] as const;
+          },
+          [[] as vscode.Location[], null as vscode.Uri | null] as const
+        );
+
+        return locations;
+      });
   }
 }
 
@@ -272,4 +368,8 @@ function initCacheData() {
       file: vscode.Uri;
     }
   >();
+}
+
+function wait(timeout: number) {
+  return new Promise((resolve) => setTimeout(resolve, timeout));
 }
