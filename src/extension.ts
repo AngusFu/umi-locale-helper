@@ -41,7 +41,6 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("locale.rename", async (ctx) => {
-      // noop
       const document = vscode.window.activeTextEditor?.document;
       const selection = vscode.window.activeTextEditor?.selection;
       if (!document || !selection) return;
