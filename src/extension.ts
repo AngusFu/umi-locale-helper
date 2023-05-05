@@ -182,14 +182,18 @@ class LocaleDefinitionProvider implements vscode.DefinitionProvider {
     if (!localeId || !cacheData.has(localeId)) return;
 
     const { pos, file } = cacheData.get(localeId)!;
-    const targetLoc = new vscode.Location(file, pos);
+    const targetRange = new vscode.Range(
+      pos,
+      new vscode.Position(pos.line, pos.character + localeId.length + 1)
+    );
+    const targetLoc = new vscode.Location(file, targetRange);
 
     const ret: vscode.LocationLink[] = [
       {
         originSelectionRange: wordRange,
-
         targetUri: targetLoc.uri,
-        targetRange: targetLoc.range,
+        targetRange: targetRange,
+        targetSelectionRange: targetRange,
       },
     ];
 
