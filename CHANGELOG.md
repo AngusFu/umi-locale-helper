@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.0.11](https://github.com/AngusFu/umi-locale-helper/compare/v0.0.10...v0.0.11) (2023-05-16)
+
+
+### Bug Fixes
+
+* 优化 hover provider range ([38dc686](https://github.com/AngusFu/umi-locale-helper/commit/38dc6864b9be8eb42c441d5dca8e769286ff746b))
+
 ### [0.0.10](https://github.com/AngusFu/umi-locale-helper/compare/v0.0.9...v0.0.10) (2023-05-05)
 
 

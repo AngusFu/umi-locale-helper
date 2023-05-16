@@ -2,7 +2,7 @@
   "name": "umi-locale-helper",
   "displayName": "umi-locale-helper",
   "description": "Umi locale helper",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "publisher": "wemlion",
   "icon": "assets/icon.png",
   "engines": {
