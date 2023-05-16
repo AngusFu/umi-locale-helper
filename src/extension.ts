@@ -47,7 +47,7 @@ export function activate(context: vscode.ExtensionContext) {
 
       const localeId = getLocaleId(
         document,
-        getWordRange(document, selection.anchor)
+        getQuotedWordRange(document, selection.anchor)
       );
       if (!localeId || !cacheData.has(localeId)) return;
 
@@ -162,7 +162,7 @@ class LocaleHoverProvider implements vscode.HoverProvider {
     position: vscode.Position,
     _token: vscode.CancellationToken
   ) {
-    const wordRange = getWordRange(document, position);
+    const wordRange = getQuotedWordRange(document, position);
     const localeId = wordRange && getLocaleId(document, wordRange);
 
     if (!localeId || !cacheData.has(localeId)) return;
@@ -176,7 +176,13 @@ class LocaleHoverProvider implements vscode.HoverProvider {
 
 class LocaleDefinitionProvider implements vscode.DefinitionProvider {
   provideDefinition(document: vscode.TextDocument, position: vscode.Position) {
-    const wordRange = getWordRange(document, position);
+    const quotedRange = getQuotedWordRange(document, position);
+    const wordRange =
+      quotedRange &&
+      quotedRange.with({
+        start: quotedRange.start.translate({ characterDelta: 1 }),
+        end: quotedRange.end.translate({ characterDelta: -1 }),
+      });
     const localeId = wordRange && getLocaleId(document, wordRange);
 
     if (!localeId || !cacheData.has(localeId)) return;
@@ -184,7 +190,7 @@ class LocaleDefinitionProvider implements vscode.DefinitionProvider {
     const { pos, file } = cacheData.get(localeId)!;
     const targetRange = new vscode.Range(
       pos,
-      new vscode.Position(pos.line, pos.character + localeId.length + 1)
+      pos.translate({ characterDelta: localeId.length + 2 })
     );
     const targetLoc = new vscode.Location(file, targetRange);
 
@@ -208,7 +214,10 @@ class LocaleReferenceProvider implements vscode.ReferenceProvider {
     context: vscode.ReferenceContext,
     token: vscode.CancellationToken
   ): vscode.ProviderResult<vscode.Location[]> {
-    const localeId = getLocaleId(document, getWordRange(document, position));
+    const localeId = getLocaleId(
+      document,
+      getQuotedWordRange(document, position)
+    );
 
     if (!localeId || !cacheData.has(localeId)) return null;
 
@@ -323,7 +332,7 @@ function getLocaleId(
   return null;
 }
 
-function getWordRange(
+function getQuotedWordRange(
   document: vscode.TextDocument,
   position: vscode.Position
 ) {
